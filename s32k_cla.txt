@@ -1,0 +1,1872 @@
+GPIO Peripheral Implementation for S32K358
+Objective: Develop a GPIO peripheral with supported pins for the S32K358 board, based on the SIUL2 configuration.
+Base Address: The GPIO peripheral will use a base address of 0x40290000 (SIUL2).
+Functionality: Implement GPIO functionality to closely match the behavior of the physical GPIO peripheral, ensuring that all supported features (e.g., pin configuration, input/output control) are accurately modeled.
+Testing Requirements: Ensure comprehensive testing of the GPIO functionality.
+Important
+.ELF File Compatibility:  the implementation of gpio should very compatible for the any S32k3xx family. Cause i think i all have the same registers and addresses. During testing, the GPIO functionality should work seamlessly, even when switching between different .elf files that use the same base address and pin configuration which belongs to S32k3xx.
+
+this is the repo 
+"https://github.com/zChups/S32K3X8EVB-QEMU-integration.git"
+
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+/*
+ * S32K358 GPIO Peripheral Implementation
+ * Based on SIUL2 (System Integration Unit Lite 2)
+ * Compatible with S32K3xx family
+ * Base Address: 0x40290000 (SIUL2)
+ */
+
+#ifndef S32K358_GPIO_H
+#define S32K358_GPIO_H
+
+#include <stdint.h>
+#include <stdbool.h>
+
+/* SIUL2 Base Address */
+#define SIUL2_BASE_ADDR         0x40290000UL
+
+/* SIUL2 Register Offsets */
+#define SIUL2_MSCR_OFFSET       0x0240UL    /* Multiplexed Signal Configuration Register */
+#define SIUL2_IMCR_OFFSET       0x0A40UL    /* Input Multiplexed Signal Configuration Register */
+#define SIUL2_GPDO_OFFSET       0x1300UL    /* GPIO Pad Data Output Register */
+#define SIUL2_GPDI_OFFSET       0x1500UL    /* GPIO Pad Data Input Register */
+#define SIUL2_PGPDO_OFFSET      0x1700UL    /* Parallel GPIO Pad Data Output Register */
+#define SIUL2_PGPDI_OFFSET      0x1740UL    /* Parallel GPIO Pad Data Input Register */
+#define SIUL2_MPGPDO_OFFSET     0x1780UL    /* Masked Parallel GPIO Pad Data Output Register */
+#define SIUL2_IFEER_OFFSET      0x2010UL    /* Interrupt Falling-Edge Enable Register */
+#define SIUL2_IREER_OFFSET      0x2014UL    /* Interrupt Rising-Edge Enable Register */
+#define SIUL2_IFMCR_OFFSET      0x2018UL    /* Interrupt Filter Maximum Counter Register */
+#define SIUL2_IFCPR_OFFSET      0x201CUL    /* Interrupt Filter Clock Prescaler Register */
+#define SIUL2_DISR_OFFSET       0x2080UL    /* DMA/Interrupt Status Register */
+#define SIUL2_DIRER_OFFSET      0x2084UL    /* DMA/Interrupt Request Enable Register */
+#define SIUL2_DIRSR_OFFSET      0x2088UL    /* DMA/Interrupt Request Select Register */
+#define SIUL2_IRSR_OFFSET       0x208CUL    /* Interrupt Request Status Register */
+
+/* Maximum number of GPIO pins for S32K358 */
+#define GPIO_MAX_PINS           144
+
+/* MSCR Register Bit Fields */
+#define MSCR_SSS_MASK           0x0000000FUL    /* Source Signal Select */
+#define MSCR_SSS_SHIFT          0
+#define MSCR_SRC_MASK           0x00000030UL    /* Slew Rate Control */
+#define MSCR_SRC_SHIFT          4
+#define MSCR_OBE_MASK           0x00000040UL    /* Output Buffer Enable */
+#define MSCR_OBE_SHIFT          6
+#define MSCR_ODE_MASK           0x00000080UL    /* Open Drain Enable */
+#define MSCR_ODE_SHIFT          7
+#define MSCR_IBE_MASK           0x00000100UL    /* Input Buffer Enable */
+#define MSCR_IBE_SHIFT          8
+#define MSCR_HYS_MASK           0x00000200UL    /* Input Hysteresis */
+#define MSCR_HYS_SHIFT          9
+#define MSCR_INV_MASK           0x00000400UL    /* Invert */
+#define MSCR_INV_SHIFT          10
+#define MSCR_PKE_MASK           0x00000800UL    /* Pull/Keep Enable */
+#define MSCR_PKE_SHIFT          11
+#define MSCR_PUS_MASK           0x00001000UL    /* Pull Select */
+#define MSCR_PUS_SHIFT          12
+#define MSCR_DSE_MASK           0x0000E000UL    /* Drive Strength Enable */
+#define MSCR_DSE_SHIFT          13
+#define MSCR_PUE_MASK           0x00010000UL    /* Pull Up Enable */
+#define MSCR_PUE_SHIFT          16
+#define MSCR_SMC_MASK           0x00020000UL    /* Safe Mode Control */
+#define MSCR_SMC_SHIFT          17
+
+/* GPIO Pin Configuration Structure */
+typedef struct {
+    uint32_t pin;               /* Pin number (0-143) */
+    uint32_t mux;               /* Pin multiplexing function (0-7) */
+    bool output_enable;         /* Output buffer enable */
+    bool input_enable;          /* Input buffer enable */
+    bool open_drain;            /* Open drain enable */
+    bool pull_enable;           /* Pull resistor enable */
+    bool pull_up;               /* Pull up (true) or pull down (false) */
+    bool hysteresis;            /* Input hysteresis enable */
+    bool invert;                /* Signal inversion */
+    uint32_t drive_strength;    /* Drive strength (0-7) */
+    uint32_t slew_rate;         /* Slew rate control (0-3) */
+} gpio_pin_config_t;
+
+/* GPIO Direction Enumeration */
+typedef enum {
+    GPIO_INPUT = 0,
+    GPIO_OUTPUT = 1,
+    GPIO_HI_Z = 2
+} gpio_direction_t;
+
+/* GPIO Pin State Enumeration */
+typedef enum {
+    GPIO_LOW = 0,
+    GPIO_HIGH = 1
+} gpio_pin_state_t;
+
+/* GPIO Pull Configuration */
+typedef enum {
+    GPIO_PULL_DISABLE = 0,
+    GPIO_PULL_DOWN = 1,
+    GPIO_PULL_UP = 2
+} gpio_pull_config_t;
+
+/* GPIO Drive Strength */
+typedef enum {
+    GPIO_DRIVE_STRENGTH_LOW = 0,
+    GPIO_DRIVE_STRENGTH_MEDIUM = 1,
+    GPIO_DRIVE_STRENGTH_HIGH = 2,
+    GPIO_DRIVE_STRENGTH_MAX = 3
+} gpio_drive_strength_t;
+
+/* GPIO Interrupt Configuration */
+typedef struct {
+    uint32_t pin;
+    bool rising_edge;
+    bool falling_edge;
+    bool filter_enable;
+    uint32_t filter_clock_prescaler;
+    uint32_t filter_max_counter;
+} gpio_interrupt_config_t;
+
+/* Function Prototypes */
+
+/* Initialization and Configuration */
+void gpio_init(void);
+void gpio_pin_init(const gpio_pin_config_t *config);
+void gpio_set_pin_direction(uint32_t pin, gpio_direction_t direction);
+void gpio_set_pin_mux(uint32_t pin, uint32_t mux_value);
+
+/* Digital I/O Operations */
+void gpio_write_pin(uint32_t pin, gpio_pin_state_t state);
+gpio_pin_state_t gpio_read_pin(uint32_t pin);
+void gpio_toggle_pin(uint32_t pin);
+
+/* Port Operations */
+void gpio_write_port(uint32_t port, uint32_t value);
+uint32_t gpio_read_port(uint32_t port);
+void gpio_write_pins_mask(uint32_t start_pin, uint32_t mask, uint32_t value);
+
+/* Pin Configuration */
+void gpio_set_pull_config(uint32_t pin, gpio_pull_config_t pull_config);
+void gpio_set_drive_strength(uint32_t pin, gpio_drive_strength_t strength);
+void gpio_set_slew_rate(uint32_t pin, uint32_t slew_rate);
+void gpio_set_open_drain(uint32_t pin, bool enable);
+void gpio_set_hysteresis(uint32_t pin, bool enable);
+
+/* Interrupt Configuration */
+void gpio_configure_interrupt(const gpio_interrupt_config_t *config);
+void gpio_enable_interrupt(uint32_t pin);
+void gpio_disable_interrupt(uint32_t pin);
+void gpio_clear_interrupt_flag(uint32_t pin);
+bool gpio_get_interrupt_flag(uint32_t pin);
+
+/* Utility Functions */
+bool gpio_is_pin_valid(uint32_t pin);
+uint32_t gpio_get_pin_from_port_bit(uint32_t port, uint32_t bit);
+void gpio_get_port_bit_from_pin(uint32_t pin, uint32_t *port, uint32_t *bit);
+
+/* Register Access Macros */
+#define SIUL2_MSCR(pin)     (*(volatile uint32_t *)(SIUL2_BASE_ADDR + SIUL2_MSCR_OFFSET + ((pin) * 4)))
+#define SIUL2_IMCR(idx)     (*(volatile uint32_t *)(SIUL2_BASE_ADDR + SIUL2_IMCR_OFFSET + ((idx) * 4)))
+#define SIUL2_GPDO(pin)     (*(volatile uint8_t *)(SIUL2_BASE_ADDR + SIUL2_GPDO_OFFSET + (pin)))
+#define SIUL2_GPDI(pin)     (*(volatile uint8_t *)(SIUL2_BASE_ADDR + SIUL2_GPDI_OFFSET + (pin)))
+#define SIUL2_PGPDO(port)   (*(volatile uint32_t *)(SIUL2_BASE_ADDR + SIUL2_PGPDO_OFFSET + ((port) * 4)))
+#define SIUL2_PGPDI(port)   (*(volatile uint32_t *)(SIUL2_BASE_ADDR + SIUL2_PGPDI_OFFSET + ((port) * 4)))
+#define SIUL2_MPGPDO(port)  (*(volatile uint64_t *)(SIUL2_BASE_ADDR + SIUL2_MPGPDO_OFFSET + ((port) * 8)))
+
+#define SIUL2_IFEER         (*(volatile uint32_t *)(SIUL2_BASE_ADDR + SIUL2_IFEER_OFFSET))
+#define SIUL2_IREER         (*(volatile uint32_t *)(SIUL2_BASE_ADDR + SIUL2_IREER_OFFSET))
+#define SIUL2_IFMCR         (*(volatile uint32_t *)(SIUL2_BASE_ADDR + SIUL2_IFMCR_OFFSET))
+#define SIUL2_IFCPR         (*(volatile uint32_t *)(SIUL2_BASE_ADDR + SIUL2_IFCPR_OFFSET))
+#define SIUL2_DISR          (*(volatile uint32_t *)(SIUL2_BASE_ADDR + SIUL2_DISR_OFFSET))
+#define SIUL2_DIRER         (*(volatile uint32_t *)(SIUL2_BASE_ADDR + SIUL2_DIRER_OFFSET))
+#define SIUL2_DIRSR         (*(volatile uint32_t *)(SIUL2_BASE_ADDR + SIUL2_DIRSR_OFFSET))
+#define SIUL2_IRSR          (*(volatile uint32_t *)(SIUL2_BASE_ADDR + SIUL2_IRSR_OFFSET))
+
+/* Common Pin Definitions for S32K358EVB */
+#define LED_RED_PIN         107     /* PTC28 */
+#define LED_GREEN_PIN       108     /* PTC29 */
+#define LED_BLUE_PIN        109     /* PTC30 */
+
+#define SW1_PIN             144     /* PTD15 */
+#define SW2_PIN             145     /* PTD16 */
+
+/* Port Definitions */
+#define GPIO_PORT_A         0
+#define GPIO_PORT_B         1
+#define GPIO_PORT_C         2
+#define GPIO_PORT_D         3
+#define GPIO_PORT_E         4
+
+#endif /* S32K358_GPIO_H */
+
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+/*
+ * S32K358 GPIO Peripheral Implementation
+ * Based on SIUL2 (System Integration Unit Lite 2)
+ * Compatible with S32K3xx family
+ */
+
+#include "s32k358_gpio.h"
+
+/* Static variables for GPIO state management */
+static bool gpio_initialized = false;
+static uint32_t gpio_pin_directions[GPIO_MAX_PINS] = {0};
+
+/**
+ * @brief Initialize the GPIO peripheral
+ */
+void gpio_init(void)
+{
+    /* Enable SIUL2 clock (assuming it's already enabled by system init) */
+    /* Reset all GPIO configurations to default state */
+    
+    for (uint32_t pin = 0; pin < GPIO_MAX_PINS; pin++) {
+        /* Set default configuration: Input with pull-up disabled */
+        SIUL2_MSCR(pin) = 0x00000100UL; /* IBE = 1, all others = 0 */
+        gpio_pin_directions[pin] = GPIO_INPUT;
+    }
+    
+    /* Clear all interrupt configurations */
+    SIUL2_IFEER = 0x00000000UL;
+    SIUL2_IREER = 0x00000000UL;
+    SIUL2_DIRER = 0x00000000UL;
+    SIUL2_DIRSR = 0x00000000UL;
+    
+    /* Clear all interrupt flags */
+    SIUL2_DISR = 0xFFFFFFFFUL;
+    SIUL2_IRSR = 0xFFFFFFFFUL;
+    
+    gpio_initialized = true;
+}
+
+/**
+ * @brief Initialize a specific GPIO pin with configuration
+ * @param config Pointer to pin configuration structure
+ */
+void gpio_pin_init(const gpio_pin_config_t *config)
+{
+    if (!gpio_is_pin_valid(config->pin)) {
+        return;
+    }
+    
+    uint32_t mscr_value = 0;
+    
+    /* Configure multiplexing */
+    mscr_value |= (config->mux & 0xF) << MSCR_SSS_SHIFT;
+    
+    /* Configure output buffer */
+    if (config->output_enable) {
+        mscr_value |= MSCR_OBE_MASK;
+        gpio_pin_directions[config->pin] = GPIO_OUTPUT;
+    }
+    
+    /* Configure input buffer */
+    if (config->input_enable) {
+        mscr_value |= MSCR_IBE_MASK;
+        if (!config->output_enable) {
+            gpio_pin_directions[config->pin] = GPIO_INPUT;
+        }
+    }
+    
+    /* Configure open drain */
+    if (config->open_drain) {
+        mscr_value |= MSCR_ODE_MASK;
+    }
+    
+    /* Configure pull resistor */
+    if (config->pull_enable) {
+        mscr_value |= MSCR_PKE_MASK;
+        if (config->pull_up) {
+            mscr_value |= MSCR_PUS_MASK;
+        }
+    }
+    
+    /* Configure hysteresis */
+    if (config->hysteresis) {
+        mscr_value |= MSCR_HYS_MASK;
+    }
+    
+    /* Configure signal inversion */
+    if (config->invert) {
+        mscr_value |= MSCR_INV_MASK;
+    }
+    
+    /* Configure drive strength */
+    mscr_value |= (config->drive_strength & 0x7) << MSCR_DSE_SHIFT;
+    
+    /* Configure slew rate */
+    mscr_value |= (config->slew_rate & 0x3) << MSCR_SRC_SHIFT;
+    
+    /* Write configuration to MSCR register */
+    SIUL2_MSCR(config->pin) = mscr_value;
+}
+
+/**
+ * @brief Set GPIO pin direction
+ * @param pin Pin number (0-143)
+ * @param direction Pin direction (INPUT, OUTPUT, HI_Z)
+ */
+void gpio_set_pin_direction(uint32_t pin, gpio_direction_t direction)
+{
+    if (!gpio_is_pin_valid(pin)) {
+        return;
+    }
+    
+    uint32_t mscr_value = SIUL2_MSCR(pin);
+    
+    switch (direction) {
+        case GPIO_INPUT:
+            mscr_value |= MSCR_IBE_MASK;    /* Enable input buffer */
+            mscr_value &= ~MSCR_OBE_MASK;   /* Disable output buffer */
+            break;
+            
+        case GPIO_OUTPUT:
+            mscr_value |= MSCR_OBE_MASK;    /* Enable output buffer */
+            mscr_value &= ~MSCR_IBE_MASK;   /* Disable input buffer */
+            break;
+            
+        case GPIO_HI_Z:
+            mscr_value &= ~(MSCR_IBE_MASK | MSCR_OBE_MASK); /* Disable both buffers */
+            break;
+            
+        default:
+            return;
+    }
+    
+    SIUL2_MSCR(pin) = mscr_value;
+    gpio_pin_directions[pin] = direction;
+}
+
+/**
+ * @brief Set GPIO pin multiplexing function
+ * @param pin Pin number (0-143)
+ * @param mux_value Multiplexing value (0-7)
+ */
+void gpio_set_pin_mux(uint32_t pin, uint32_t mux_value)
+{
+    if (!gpio_is_pin_valid(pin) || mux_value > 7) {
+        return;
+    }
+    
+    uint32_t mscr_value = SIUL2_MSCR(pin);
+    mscr_value &= ~MSCR_SSS_MASK;
+    mscr_value |= (mux_value << MSCR_SSS_SHIFT);
+    SIUL2_MSCR(pin) = mscr_value;
+}
+
+/**
+ * @brief Write value to GPIO pin
+ * @param pin Pin number (0-143)
+ * @param state Pin state (LOW or HIGH)
+ */
+void gpio_write_pin(uint32_t pin, gpio_pin_state_t state)
+{
+    if (!gpio_is_pin_valid(pin)) {
+        return;
+    }
+    
+    if (gpio_pin_directions[pin] != GPIO_OUTPUT) {
+        /* Configure pin as output if not already */
+        gpio_set_pin_direction(pin, GPIO_OUTPUT);
+    }
+    
+    SIUL2_GPDO(pin) = (state == GPIO_HIGH) ? 1 : 0;
+}
+
+/**
+ * @brief Read value from GPIO pin
+ * @param pin Pin number (0-143)
+ * @return Pin state (LOW or HIGH)
+ */
+gpio_pin_state_t gpio_read_pin(uint32_t pin)
+{
+    if (!gpio_is_pin_valid(pin)) {
+        return GPIO_LOW;
+    }
+    
+    return (SIUL2_GPDI(pin) != 0) ? GPIO_HIGH : GPIO_LOW;
+}
+
+/**
+ * @brief Toggle GPIO pin state
+ * @param pin Pin number (0-143)
+ */
+void gpio_toggle_pin(uint32_t pin)
+{
+    if (!gpio_is_pin_valid(pin)) {
+        return;
+    }
+    
+    gpio_pin_state_t current_state = gpio_read_pin(pin);
+    gpio_write_pin(pin, (current_state == GPIO_HIGH) ? GPIO_LOW : GPIO_HIGH);
+}
+
+/**
+ * @brief Write value to entire GPIO port
+ * @param port Port number (0-4)
+ * @param value 32-bit value to write
+ */
+void gpio_write_port(uint32_t port, uint32_t value)
+{
+    if (port > GPIO_PORT_E) {
+        return;
+    }
+    
+    SIUL2_PGPDO(port) = value;
+}
+
+/**
+ * @brief Read value from entire GPIO port
+ * @param port Port number (0-4)
+ * @return 32-bit port value
+ */
+uint32_t gpio_read_port(uint32_t port)
+{
+    if (port > GPIO_PORT_E) {
+        return 0;
+    }
+    
+    return SIUL2_PGPDI(port);
+}
+
+/**
+ * @brief Write to multiple pins using mask
+ * @param start_pin Starting pin number
+ * @param mask Bit mask for pins to modify
+ * @param value Values to write
+ */
+void gpio_write_pins_mask(uint32_t start_pin, uint32_t mask, uint32_t value)
+{
+    if (!gpio_is_pin_valid(start_pin) || start_pin + 31 >= GPIO_MAX_PINS) {
+        return;
+    }
+    
+    uint32_t port = start_pin / 32;
+    uint32_t current_value = SIUL2_PGPDI(port);
+    
+    /* Clear bits specified by mask, then set new values */
+    current_value = (current_value & ~mask) | (value & mask);
+    SIUL2_PGPDO(port) = current_value;
+}
+
+/**
+ * @brief Configure GPIO pin pull resistor
+ * @param pin Pin number (0-143)
+ * @param pull_config Pull configuration
+ */
+void gpio_set_pull_config(uint32_t pin, gpio_pull_config_t pull_config)
+{
+    if (!gpio_is_pin_valid(pin)) {
+        return;
+    }
+    
+    uint32_t mscr_value = SIUL2_MSCR(pin);
+    
+    switch (pull_config) {
+        case GPIO_PULL_DISABLE:
+            mscr_value &= ~MSCR_PKE_MASK;
+            break;
+            
+        case GPIO_PULL_DOWN:
+            mscr_value |= MSCR_PKE_MASK;
+            mscr_value &= ~MSCR_PUS_MASK;
+            break;
+            
+        case GPIO_PULL_UP:
+            mscr_value |= MSCR_PKE_MASK;
+            mscr_value |= MSCR_PUS_MASK;
+            break;
+            
+        default:
+            return;
+    }
+    
+    SIUL2_MSCR(pin) = mscr_value;
+}
+
+/**
+ * @brief Set GPIO pin drive strength
+ * @param pin Pin number (0-143)
+ * @param strength Drive strength setting
+ */
+void gpio_set_drive_strength(uint32_t pin, gpio_drive_strength_t strength)
+{
+    if (!gpio_is_pin_valid(pin)) {
+        return;
+    }
+    
+    uint32_t mscr_value = SIUL2_MSCR(pin);
+    mscr_value &= ~MSCR_DSE_MASK;
+    mscr_value |= ((uint32_t)strength << MSCR_DSE_SHIFT);
+    SIUL2_MSCR(pin) = mscr_value;
+}
+
+/**
+ * @brief Set GPIO pin slew rate
+ * @param pin Pin number (0-143)
+ * @param slew_rate Slew rate value (0-3)
+ */
+void gpio_set_slew_rate(uint32_t pin, uint32_t slew_rate)
+{
+    if (!gpio_is_pin_valid(pin) || slew_rate > 3) {
+        return;
+    }
+    
+    uint32_t mscr_value = SIUL2_MSCR(pin);
+    mscr_value &= ~MSCR_SRC_MASK;
+    mscr_value |= (slew_rate << MSCR_SRC_SHIFT);
+    SIUL2_MSCR(pin) = mscr_value;
+}
+
+/**
+ * @brief Configure GPIO pin open drain
+ * @param pin Pin number (0-143)
+ * @param enable Enable or disable open drain
+ */
+void gpio_set_open_drain(uint32_t pin, bool enable)
+{
+    if (!gpio_is_pin_valid(pin)) {
+        return;
+    }
+    
+    uint32_t mscr_value = SIUL2_MSCR(pin);
+    
+    if (enable) {
+        mscr_value |= MSCR_ODE_MASK;
+    } else {
+        mscr_value &= ~MSCR_ODE_MASK;
+    }
+    
+    SIUL2_MSCR(pin) = mscr_value;
+}
+
+/**
+ * @brief Configure GPIO pin input hysteresis
+ * @param pin Pin number (0-143)
+ * @param enable Enable or disable hysteresis
+ */
+void gpio_set_hysteresis(uint32_t pin, bool enable)
+{
+    if (!gpio_is_pin_valid(pin)) {
+        return;
+    }
+    
+    uint32_t mscr_value = SIUL2_MSCR(pin);
+    
+    if (enable) {
+        mscr_value |= MSCR_HYS_MASK;
+    } else {
+        mscr_value &= ~MSCR_HYS_MASK;
+    }
+    
+    SIUL2_MSCR(pin) = mscr_value;
+}
+
+/**
+ * @brief Configure GPIO interrupt
+ * @param config Pointer to interrupt configuration
+ */
+void gpio_configure_interrupt(const gpio_interrupt_config_t *config)
+{
+    if (!gpio_is_pin_valid(config->pin) || config->pin >= 32) {
+        return; /* Only first 32 pins support external interrupts */
+    }
+    
+    uint32_t pin_mask = (1UL << config->pin);
+    
+    /* Configure edge detection */
+    if (config->rising_edge) {
+        SIUL2_IREER |= pin_mask;
+    } else {
+        SIUL2_IREER &= ~pin_mask;
+    }
+    
+    if (config->falling_edge) {
+        SIUL2_IFEER |= pin_mask;
+    } else {
+        SIUL2_IFEER &= ~pin_mask;
+    }
+    
+    /* Configure filter if enabled */
+    if (config->filter_enable) {
+        SIUL2_IFCPR = config->filter_clock_prescaler;
+        SIUL2_IFMCR = config->filter_max_counter;
+    }
+    
+    /* Clear any pending interrupt */
+    SIUL2_DISR = pin_mask;
+    SIUL2_IRSR = pin_mask;
+}
+
+/**
+ * @brief Enable GPIO interrupt
+ * @param pin Pin number (0-31)
+ */
+void gpio_enable_interrupt(uint32_t pin)
+{
+    if (!gpio_is_pin_valid(pin) || pin >= 32) {
+        return;
+    }
+    
+    uint32_t pin_mask = (1UL << pin);
+    SIUL2_DIRER |= pin_mask;
+}
+
+/**
+ * @brief Disable GPIO interrupt
+ * @param pin Pin number (0-31)
+ */
+void gpio_disable_interrupt(uint32_t pin)
+{
+    if (!gpio_is_pin_valid(pin) || pin >= 32) {
+        return;
+    }
+    
+    uint32_t pin_mask = (1UL << pin);
+    SIUL2_DIRER &= ~pin_mask;
+}
+
+/**
+ * @brief Clear GPIO interrupt flag
+ * @param pin Pin number (0-31)
+ */
+void gpio_clear_interrupt_flag(uint32_t pin)
+{
+    if (!gpio_is_pin_valid(pin) || pin >= 32) {
+        return;
+    }
+    
+    uint32_t pin_mask = (1UL << pin);
+    SIUL2_DISR = pin_mask;
+    SIUL2_IRSR = pin_mask;
+}
+
+/**
+ * @brief Get GPIO interrupt flag status
+ * @param pin Pin number (0-31)
+ * @return true if interrupt flag is set, false otherwise
+ */
+bool gpio_get_interrupt_flag(uint32_t pin)
+{
+    if (!gpio_is_pin_valid(pin) || pin >= 32) {
+        return false;
+    }
+    
+    uint32_t pin_mask = (1UL << pin);
+    return ((SIUL2_DISR & pin_mask) != 0) || ((SIUL2_IRSR & pin_mask) != 0);
+}
+
+/**
+ * @brief Check if pin number is valid
+ * @param pin Pin number to check
+ * @return true if valid, false otherwise
+ */
+bool gpio_is_pin_valid(uint32_t pin)
+{
+    return (pin < GPIO_MAX_PINS);
+}
+
+/**
+ * @brief Convert port and bit to pin number
+ * @param port Port number (0-4)
+ * @param bit Bit position (0-31)
+ * @return Pin number
+ */
+uint32_t gpio_get_pin_from_port_bit(uint32_t port, uint32_t bit)
+{
+    if (port > GPIO_PORT_E || bit > 31) {
+        return 0xFFFFFFFFUL; /* Invalid */
+    }
+    
+    return (port * 32) + bit;
+}
+
+/**
+ * @brief Convert pin number to port and bit
+ * @param pin Pin number
+ * @param port Pointer to store port number
+ * @param bit Pointer to store bit position
+ */
+void gpio_get_port_bit_from_pin(uint32_t pin, uint32_t *port, uint32_t *bit)
+{
+    if (!gpio_is_pin_valid(pin) || port == NULL || bit == NULL) {
+        return;
+    }
+    
+    *port = pin / 32;
+    *bit = pin % 32;
+}
+
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------=
+
+/*
+ * S32K358 GPIO (SIUL2) Peripheral QEMU Implementation
+ * Compatible with S32K3xx family
+ * Base Address: 0x40290000
+ */
+
+#include "qemu/osdep.h"
+#include "hw/sysbus.h"
+#include "hw/qdev-properties.h"
+#include "qemu/log.h"
+#include "qapi/error.h"
+#include "hw/irq.h"
+
+#define TYPE_S32K358_GPIO "s32k358-gpio"
+OBJECT_DECLARE_SIMPLE_TYPE(S32K358GPIOState, S32K358_GPIO)
+
+/* Register definitions */
+#define SIUL2_MSCR_OFFSET       0x0240
+#define SIUL2_IMCR_OFFSET       0x0A40
+#define SIUL2_GPDO_OFFSET       0x1300
+#define SIUL2_GPDI_OFFSET       0x1500
+#define SIUL2_PGPDO_OFFSET      0x1700
+#define SIUL2_PGPDI_OFFSET      0x1740
+#define SIUL2_MPGPDO_OFFSET     0x1780
+#define SIUL2_IFEER_OFFSET      0x2010
+#define SIUL2_IREER_OFFSET      0x2014
+#define SIUL2_IFMCR_OFFSET      0x2018
+#define SIUL2_IFCPR_OFFSET      0x201C
+#define SIUL2_DISR_OFFSET       0x2080
+#define SIUL2_DIRER_OFFSET      0x2084
+#define SIUL2_DIRSR_OFFSET      0x2088
+#define SIUL2_IRSR_OFFSET       0x208C
+
+#define GPIO_MAX_PINS           144
+#define GPIO_MAX_PORTS          5
+#define GPIO_INTERRUPT_PINS     32
+
+/* MSCR bit definitions */
+#define MSCR_SSS_MASK           0x0000000F
+#define MSCR_SRC_MASK           0x00000030
+#define MSCR_OBE_MASK           0x00000040
+#define MSCR_ODE_MASK           0x00000080
+#define MSCR_IBE_MASK           0x00000100
+#define MSCR_HYS_MASK           0x00000200
+#define MSCR_INV_MASK           0x00000400
+#define MSCR_PKE_MASK           0x00000800
+#define MSCR_PUS_MASK           0x00001000
+#define MSCR_DSE_MASK           0x0000E000
+#define MSCR_PUE_MASK           0x00010000
+#define MSCR_SMC_MASK           0x00020000
+
+struct S32K358GPIOState {
+    SysBusDevice parent_obj;
+    
+    MemoryRegion mmio;
+    qemu_irq irq[GPIO_INTERRUPT_PINS];
+    
+    /* GPIO Registers */
+    uint32_t mscr[GPIO_MAX_PINS];           /* Multiplexed Signal Configuration */
+    uint32_t imcr[512];                     /* Input Multiplexed Signal Configuration */
+    uint8_t gpdo[GPIO_MAX_PINS];            /* GPIO Pad Data Output */
+    uint8_t gpdi[GPIO_MAX_PINS];            /* GPIO Pad Data Input */
+    uint32_t pgpdo[GPIO_MAX_PORTS];         /* Parallel GPIO Pad Data Output */
+    uint32_t pgpdi[GPIO_MAX_PORTS];         /* Parallel GPIO Pad Data Input */
+    uint64_t mpgpdo[GPIO_MAX_PORTS];        /* Masked Parallel GPIO Pad Data Output */
+    
+    /* Interrupt Registers */
+    uint32_t ifeer;                         /* Interrupt Falling-Edge Enable */
+    uint32_t ireer;                         /* Interrupt Rising-Edge Enable */
+    uint32_t ifmcr;                         /* Interrupt Filter Maximum Counter */
+    uint32_t ifcpr;                         /* Interrupt Filter Clock Prescaler */
+    uint32_t disr;                          /* DMA/Interrupt Status */
+    uint32_t direr;                         /* DMA/Interrupt Request Enable */
+    uint32_t dirsr;                         /* DMA/Interrupt Request Select */
+    uint32_t irsr;                          /* Interrupt Request Status */
+    
+    /* Internal state */
+    uint8_t pin_states[GPIO_MAX_PINS];      /* Current pin input states */
+    uint8_t prev_pin_states[GPIO_MAX_PINS]; /* Previous pin states for edge detection */
+};
+
+/* Helper functions */
+static bool is_pin_output_enabled(S32K358GPIOState *s, uint32_t pin)
+{
+    return (s->mscr[pin] & MSCR_OBE_MASK) != 0;
+}
+
+static bool is_pin_input_enabled(S32K358GPIOState *s, uint32_t pin)
+{
+    return (s->mscr[pin] & MSCR_IBE_MASK) != 0;
+}
+
+static bool is_pin_inverted(S32K358GPIOState *s, uint32_t pin)
+{
+    return (s->mscr[pin] & MSCR_INV_MASK) != 0;
+}
+
+static uint8_t get_pin_input_value(S32K358GPIOState *s, uint32_t pin)
+{
+    uint8_t value = s->pin_states[pin];
+    
+    /* Apply pull resistor if no external drive */
+    if (value == 0xFF) { /* No external drive */
+        if (s->mscr[pin] & MSCR_PKE_MASK) { /* Pull enabled */
+            if (s->mscr[pin] & MSCR_PUS_MASK) {
+                value = 1; /* Pull-up */
+            } else {
+                value = 0; /* Pull-down */
+            }
+        } else {
+            value = 0; /* Default to low if no pull */
+        }
+    }
+    
+    /* Apply inversion */
+    if (is_pin_inverted(s, pin)) {
+        value = !value;
+    }
+    
+    return value;
+}
+
+static void update_parallel_registers(S32K358GPIOState *s)
+{
+    /* Update parallel GPIO registers based on individual pin states */
+    for (uint32_t port = 0; port < GPIO_MAX_PORTS; port++) {
+        s->pgpdo[port] = 0;
+        s->pgpdi[port] = 0;
+        
+        for (uint32_t bit = 0; bit < 32; bit++) {
+            uint32_t pin = port * 32 + bit;
+            
+            if (pin >= GPIO_MAX_PINS) {
+                break;
+            }
+            
+            /* Update PGPDO from individual GPDO */
+            if (s->gpdo[pin]) {
+                s->pgpdo[port] |= (1UL << bit);
+            }
+            
+            /* Update PGPDI from individual GPDI */
+            if (s->gpdi[pin]) {
+                s->pgpdi[port] |= (1UL << bit);
+            }
+        }
+    }
+}
+
+static void update_pin_interrupts(S32K358GPIOState *s, uint32_t pin)
+{
+    if (pin >= GPIO_INTERRUPT_PINS) {
+        return;
+    }
+    
+    uint8_t current_state = get_pin_input_value(s, pin);
+    uint8_t previous_state = s->prev_pin_states[pin];
+    uint32_t pin_mask = 1UL << pin;
+    bool trigger_interrupt = false;
+    
+    /* Check for rising edge */
+    if ((s->ireer & pin_mask) && !previous_state && current_state) {
+        trigger_interrupt = true;
+    }
+    
+    /* Check for falling edge */
+    if ((s->ifeer & pin_mask) && previous_state && !current_state) {
+        trigger_interrupt = true;
+    }
+    
+    if (trigger_interrupt && (s->direr & pin_mask)) {
+        /* Set interrupt status */
+        s->disr |= pin_mask;
+        s->irsr |= pin_mask;
+        
+        /* Assert interrupt if enabled */
+        qemu_irq_raise(s->irq[pin]);
+    }
+    
+    s->prev_pin_states[pin] = current_state;
+}
+
+static uint64_t s32k358_gpio_read(void *opaque, hwaddr offset, unsigned size)
+{
+    S32K358GPIOState *s = S32K358_GPIO(opaque);
+    uint64_t value = 0;
+    
+    if (offset >= SIUL2_MSCR_OFFSET && offset < SIUL2_MSCR_OFFSET + (GPIO_MAX_PINS * 4)) {
+        uint32_t pin = (offset - SIUL2_MSCR_OFFSET) / 4;
+        value = s->mscr[pin];
+        
+    } else if (offset >= SIUL2_IMCR_OFFSET && offset < SIUL2_IMCR_OFFSET + (512 * 4)) {
+        uint32_t idx = (offset - SIUL2_IMCR_OFFSET) / 4;
+        value = s->imcr[idx];
+        
+    } else if (offset >= SIUL2_GPDO_OFFSET && offset < SIUL2_GPDO_OFFSET + GPIO_MAX_PINS) {
+        uint32_t pin = offset - SIUL2_GPDO_OFFSET;
+        value = s->gpdo[pin];
+        
+    } else if (offset >= SIUL2_GPDI_OFFSET && offset < SIUL2_GPDI_OFFSET + GPIO_MAX_PINS) {
+        uint32_t pin = offset - SIUL2_GPDI_OFFSET;
+        if (is_pin_input_enabled(s, pin)) {
+            s->gpdi[pin] = get_pin_input_value(s, pin);
+        }
+        value = s->gpdi[pin];
+        
+    } else if (offset >= SIUL2_PGPDO_OFFSET && offset < SIUL2_PGPDO_OFFSET + (GPIO_MAX_PORTS * 4)) {
+        uint32_t port = (offset - SIUL2_PGPDO_OFFSET) / 4;
+        value = s->pgpdo[port];
+        
+    } else if (offset >= SIUL2_PGPDI_OFFSET && offset < SIUL2_PGPDI_OFFSET + (GPIO_MAX_PORTS * 4)) {
+        uint32_t port = (offset - SIUL2_PGPDI_OFFSET) / 4;
+        
+        /* Update PGPDI based on current pin states */
+        s->pgpdi[port] = 0;
+        for (uint32_t bit = 0; bit < 32; bit++) {
+            uint32_t pin = port * 32 + bit;
+            if (pin >= GPIO_MAX_PINS) break;
+            
+            if (is_pin_input_enabled(s, pin)) {
+                s->gpdi[pin] = get_pin_input_value(s, pin);
+                if (s->gpdi[pin]) {
+                    s->pgpdi[port] |= (1UL << bit);
+                }
+            }
+        }
+        value = s->pgpdi[port];
+        
+    } else if (offset >= SIUL2_MPGPDO_OFFSET && offset < SIUL2_MPGPDO_OFFSET + (GPIO_MAX_PORTS * 8)) {
+        uint32_t port = (offset - SIUL2_MPGPDO_OFFSET) / 8;
+        value = s->mpgpdo[port];
+        
+    } else {
+        switch (offset) {
+            case SIUL2_IFEER_OFFSET:
+                value = s->ifeer;
+                break;
+            case SIUL2_IREER_OFFSET:
+                value = s->ireer;
+                break;
+            case SIUL2_IFMCR_OFFSET:
+                value = s->ifmcr;
+                break;
+            case SIUL2_IFCPR_OFFSET:
+                value = s->ifcpr;
+                break;
+            case SIUL2_DISR_OFFSET:
+                value = s->disr;
+                break;
+            case SIUL2_DIRER_OFFSET:
+                value = s->direr;
+                break;
+            case SIUL2_DIRSR_OFFSET:
+                value = s->dirsr;
+                break;
+            case SIUL2_IRSR_OFFSET:
+                value = s->irsr;
+                break;
+            default:
+                qemu_log_mask(LOG_GUEST_ERROR, "%s: Bad offset 0x%"HWADDR_PRIx"\n",
+                              __func__, offset);
+                break;
+        }
+    }
+    
+    return value;
+}
+
+static void s32k358_gpio_write(void *opaque, hwaddr offset, uint64_t value, unsigned size)
+{
+    S32K358GPIOState *s = S32K358_GPIO(opaque);
+    
+    if (offset >= SIUL2_MSCR_OFFSET && offset < SIUL2_MSCR_OFFSET + (GPIO_MAX_PINS * 4)) {
+        uint32_t pin = (offset - SIUL2_MSCR_OFFSET) / 4;
+        s->mscr[pin] = value;
+        
+    } else if (offset >= SIUL2_IMCR_OFFSET && offset < SIUL2_IMCR_OFFSET + (512 * 4)) {
+        uint32_t idx = (offset - SIUL2_IMCR_OFFSET) / 4;
+        s->imcr[idx] = value;
+        
+    } else if (offset >= SIUL2_GPDO_OFFSET && offset < SIUL2_GPDO_OFFSET + GPIO_MAX_PINS) {
+        uint32_t pin = offset - SIUL2_GPDO_OFFSET;
+        
+        if (is_pin_output_enabled(s, pin)) {
+            s->gpdo[pin] = value & 1;
+            /* Update external pin state if it's an output */
+            s->pin_states[pin] = s->gpdo[pin];
+        }
+        
+    } else if (offset >= SIUL2_PGPDO_OFFSET && offset < SIUL2_PGPDO_OFFSET + (GPIO_MAX_PORTS * 4)) {
+        uint32_t port = (offset - SIUL2_PGPDO_OFFSET) / 4;
+        s->pgpdo[port] = value;
+        
+        /* Update individual GPDO registers */
+        for (uint32_t bit = 0; bit < 32; bit++) {
+            uint32_t pin = port * 32 + bit;
+            if (pin >= GPIO_MAX_PINS) break;
+            
+            if (is_pin_output_enabled(s, pin)) {
+                s->gpdo[pin] = (value >> bit) & 1;
+                s->pin_states[pin] = s->gpdo[pin];
+            }
+        }
+        
+    } else if (offset >= SIUL2_MPGPDO_OFFSET && offset < SIUL2_MPGPDO_OFFSET + (GPIO_MAX_PORTS * 8)) {
+        uint32_t port = (offset - SIUL2_MPGPDO_OFFSET) / 8;
+        uint32_t mask = (value >> 32) & 0xFFFFFFFF;
+        uint32_t data = value & 0xFFFFFFFF;
+        
+        /* Masked write operation */
+        s->pgpdo[port] = (s->pgpdo[port] & ~mask) | (data & mask);
+        s->mpgpdo[port] = value;
+        
+        /* Update individual GPDO registers for masked bits */
+        for (uint32_t bit = 0; bit < 32; bit++) {
+            if (mask & (1UL << bit)) {
+                uint32_t pin = port * 32 + bit;
+                if (pin >= GPIO_MAX_PINS) break;
+                
+                if (is_pin_output_enabled(s, pin)) {
+                    s->gpdo[pin] = (data >> bit) & 1;
+                    s->pin_states[pin] = s->gpdo[pin];
+                }
+            }
+        }
+        
+    } else {
+        switch (offset) {
+            case SIUL2_IFEER_OFFSET:
+                s->ifeer = value;
+                break;
+            case SIUL2_IREER_OFFSET:
+                s->ireer = value;
+                break;
+            case SIUL2_IFMCR_OFFSET:
+                s->ifmcr = value;
+                break;
+            case SIUL2_IFCPR_OFFSET:
+                s->ifcpr = value;
+                break;
+            case SIUL2_DISR_OFFSET:
+                /* Writing 1 clears the interrupt flag */
+                s->disr &= ~value;
+                for (uint32_t pin = 0; pin < GPIO_INTERRUPT_PINS; pin++) {
+                    if (value & (1UL << pin)) {
+                        qemu_irq_lower(s->irq[pin]);
+                    }
+                }
+                break;
+            case SIUL2_DIRER_OFFSET:
+                s->direr = value;
+                break;
+            case SIUL2_DIRSR_OFFSET:
+                s->dirsr = value;
+                break;
+            case SIUL2_IRSR_OFFSET:
+                /* Writing 1 clears the interrupt flag */
+                s->irsr &= ~value;
+                for (uint32_t pin = 0; pin < GPIO_INTERRUPT_PINS; pin++) {
+                    if (value & (1UL << pin)) {
+                        qemu_irq_lower(s->irq[pin]);
+                    }
+                }
+                break;
+            default:
+                qemu_log_mask(LOG_GUEST_ERROR, "%s: Bad offset 0x%"HWADDR_PRIx"\n",
+                              __func__, offset);
+                break;
+        }
+    }
+    
+    /* Update parallel registers after any write */
+    update_parallel_registers(s);
+}
+
+static const MemoryRegionOps s32k358_gpio_ops = {
+    .read = s32k358_gpio_read,
+    .write = s32k358_gpio_write,
+    .endianness = DEVICE_LITTLE_ENDIAN,
+    .valid = {
+        .min_access_size = 1,
+        .max_access_size = 8,
+    },
+};
+
+/* External pin change handler */
+static void s32k358_gpio_set_pin(void *opaque, int pin, int level)
+{
+    S32K358GPIOState *s = S32K358_GPIO(opaque);
+    
+    if (pin >= GPIO_MAX_PINS) {
+        return;
+    }
+    
+    /* Only update if pin is configured as input */
+    if (is_pin_input_enabled(s, pin) && !is_pin_output_enabled(s, pin)) {
+        s->pin_states[pin] = level ? 1 : 0;
+        s->gpdi[pin] = get_pin_input_value(s, pin);
+        
+        /* Check for interrupt conditions */
+        update_pin_interrupts(s, pin);
+        
+        /* Update parallel registers */
+        update_parallel_registers(s);
+    }
+}
+
+static void s32k358_gpio_reset(DeviceState *dev)
+{
+    S32K358GPIOState *s = S32K358_GPIO(dev);
+    
+    /* Reset all registers to default values */
+    for (uint32_t i = 0; i < GPIO_MAX_PINS; i++) {
+        s->mscr[i] = 0x00000100; /* IBE = 1, all others = 0 */
+        s->gpdo[i] = 0;
+        s->gpdi[i] = 0;
+        s->pin_states[i] = 0xFF; /* No external drive */
+        s->prev_pin_states[i] = 0;
+    }
+    
+    for (uint32_t i = 0; i < 512; i++) {
+        s->imcr[i] = 0;
+    }
+    
+    for (uint32_t i = 0; i < GPIO_MAX_PORTS; i++) {
+        s->pgpdo[i] = 0;
+        s->pgpdi[i] = 0;
+        s->mpgpdo[i] = 0;
+    }
+    
+    s->ifeer = 0;
+    s->ireer = 0;
+    s->ifmcr = 0;
+    s->ifcpr = 0;
+    s->disr = 0;
+    s->direr = 0;
+    s->dirsr = 0;
+    s->irsr = 0;
+    
+    /* Lower all interrupt lines */
+    for (uint32_t i = 0; i < GPIO_INTERRUPT_PINS; i++) {
+        qemu_irq_lower(s->irq[i]);
+    }
+}
+
+static void s32k358_gpio_realize(DeviceState *dev, Error **errp)
+{
+    S32K358GPIOState *s = S32K358_GPIO(dev);
+    SysBusDevice *sbd = SYS_BUS_DEVICE(dev);
+    
+    /* Initialize memory region */
+    memory_region_init_io(&s->mmio, OBJECT(s), &s32k358_gpio_ops, s,
+                          TYPE_S32K358_GPIO, 0x3000);
+    sysbus_init_mmio(sbd, &s->mmio);
+    
+    /* Initialize interrupt lines */
+    for (uint32_t i = 0; i < GPIO_INTERRUPT_PINS; i++) {
+        sysbus_init_irq(sbd, &s->irq[i]);
+    }
+    
+    /* Initialize GPIO input handler */
+    qdev_init_gpio_in_named(dev, s32k358_gpio_set_pin, "gpio-in", GPIO_MAX_PINS);
+}
+
+static void s32k358_gpio_class_init(ObjectClass *klass, void *data)
+{
+    DeviceClass *dc = DEVICE_CLASS(klass);
+    
+    dc->realize = s32k358_gpio_realize;
+    dc->reset = s32k358_gpio_reset;
+    dc->desc = "S32K358 GPIO Controller (SIUL2)";
+}
+
+static const TypeInfo s32k358_gpio_info = {
+    .name = TYPE_S32K358_GPIO,
+    .parent = TYPE_SYS_BUS_DEVICE,
+    .instance_size = sizeof(S32K358GPIOState),
+    .class_init = s32k358_gpio_class_init,
+};
+
+static void s32k358_gpio_register_types(void)
+{
+    type_register_static(&s32k358_gpio_info);
+}
+
+type_init(s32k358_gpio_register_types)
+
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+/*
+ * S32K358 Board GPIO Integration
+ * This file provides board-level GPIO integration for QEMU
+ */
+
+#include "qemu/osdep.h"
+#include "hw/arm/boot.h"
+#include "hw/boards.h"
+#include "hw/qdev-properties.h"
+#include "qapi/error.h"
+#include "sysemu/sysemu.h"
+#include "hw/arm/armv7m.h"
+#include "hw/char/pl011.h"
+#include "hw/misc/unimp.h"
+#include "hw/sysbus.h"
+#include "qemu/error-report.h"
+
+#define TYPE_S32K358_SOC "s32k358-soc"
+#define TYPE_S32K358_BOARD "s32k358evb"
+#define TYPE_S32K358_GPIO "s32k358-gpio"
+
+OBJECT_DECLARE_SIMPLE_TYPE(S32K358SoCState, S32K358_SOC)
+OBJECT_DECLARE_SIMPLE_TYPE(S32K358BoardState, S32K358_BOARD)
+
+/* S32K358 Memory Map */
+#define S32K358_FLASH_BASE      0x00400000
+#define S32K358_FLASH_SIZE      (4 * 1024 * 1024)  /* 4MB */
+#define S32K358_SRAM_BASE       0x20000000
+#define S32K358_SRAM_SIZE       (640 * 1024)       /* 640KB */
+#define S32K358_PERIPH_BASE     0x40000000
+#define S32K358_GPIO_BASE       0x40290000
+#define S32K358_LPUART_BASE     0x40328000
+#define S32K358_PIT_BASE        0x40188000
+#define S32K358_LPIT_BASE       0x40188000
+
+/* IRQ Numbers */
+#define S32K358_GPIO_IRQ_BASE   16
+#define S32K358_LPUART0_IRQ     32
+#define S32K358_LPUART1_IRQ     33
+#define S32K358_PIT_IRQ         40
+
+struct S32K358SoCState {
+    DeviceState parent_obj;
+    
+    ARMv7MState armv7m;
+    DeviceState *gpio;
+    DeviceState *uart[2];
+    
+    MemoryRegion flash;
+    MemoryRegion sram;
+    MemoryRegion peripheral;
+};
+
+struct S32K358BoardState {
+    MachineState parent_obj;
+    
+    S32K358SoCState soc;
+    bool secure;
+};
+
+/* GPIO Pin Mappings for S32K358EVB */
+static const struct {
+    const char *name;
+    uint32_t pin;
+    bool is_led;
+    bool is_button;
+} s32k358_gpio_pins[] = {
+    /* LEDs */
+    {"led_red",   107, true,  false},  /* PTC28 */
+    {"led_green", 108, true,  false},  /* PTC29 */
+    {"led_blue",  109, true,  false},  /* PTC30 */
+    
+    /* Buttons */
+    {"sw1", 144, false, true},         /* PTD15 */
+    {"sw2", 145, false, true},         /* PTD16 */
+    
+    /* Additional GPIO pins for expansion */
+    {"gpio_0",   0,   false, false},
+    {"gpio_1",   1,   false, false},
+    {"gpio_10",  10,  false, false},
+    {"gpio_11",  11,  false, false},
+    {"gpio_20",  20,  false, false},
+    {"gpio_21",  21,  false, false},
+    {"gpio_30",  30,  false, false},
+    {"gpio_31",  31,  false, false},
+};
+
+static void s32k358_soc_initfn(Object *obj)
+{
+    S32K358SoCState *s = S32K358_SOC(obj);
+    
+    object_initialize_child(obj, "armv7m", &s->armv7m, TYPE_ARMV7M);
+}
+
+static void s32k358_soc_realize(DeviceState *dev_soc, Error **errp)
+{
+    S32K358SoCState *s = S32K358_SOC(dev_soc);
+    DeviceState *armv7m;
+    SysBusDevice *busdev;
+    Error *err = NULL;
+    int i;
+    
+    /* Configure the CPU */
+    object_property_set_uint(OBJECT(&s->armv7m), "num-irq", 256, &error_abort);
+    object_property_set_str(OBJECT(&s->armv7m), "cpu-type", 
+                           ARM_CPU_TYPE_NAME("cortex-m7"), &error_abort);
+    object_property_set_uint(OBJECT(&s->armv7m), "num-prio-bits", 4, &error_abort);
+    
+    /* Realize the CPU */
+    if (!sysbus_realize(SYS_BUS_DEVICE(&s->armv7m), errp)) {
+        return;
+    }
+    armv7m = DEVICE(&s->armv7m);
+    
+    /* Flash memory */
+    memory_region_init_rom(&s->flash, OBJECT(dev_soc), "s32k358.flash",
+                          S32K358_FLASH_SIZE, &err);
+    if (err) {
+        error_propagate(errp, err);
+        return;
+    }
+    memory_region_add_subregion(get_system_memory(), S32K358_FLASH_BASE, &s->flash);
+    
+    /* SRAM */
+    memory_region_init_ram(&s->sram, OBJECT(dev_soc), "s32k358.sram",
+                          S32K358_SRAM_SIZE, &err);
+    if (err) {
+        error_propagate(errp, err);
+        return;
+    }
+    memory_region_add_subregion(get_system_memory(), S32K358_SRAM_BASE, &s->sram);
+    
+    /* Peripheral region */
+    memory_region_init(&s->peripheral, OBJECT(dev_soc), "s32k358.peripheral",
+                      0x10000000);
+    memory_region_add_subregion(get_system_memory(), S32K358_PERIPH_BASE, 
+                               &s->peripheral);
+    
+    /* GPIO Controller */
+    s->gpio = qdev_new(TYPE_S32K358_GPIO);
+    busdev = SYS_BUS_DEVICE(s->gpio);
+    if (!sysbus_realize(busdev, errp)) {
+        return;
+    }
+    memory_region_add_subregion(&s->peripheral, S32K358_GPIO_BASE - S32K358_PERIPH_BASE,
+                               sysbus_mmio_get_region(busdev, 0));
+    
+    /* Connect GPIO interrupts */
+    for (i = 0; i < 32; i++) {
+        sysbus_connect_irq(busdev, i, qdev_get_gpio_in(armv7m, S32K358_GPIO_IRQ_BASE + i));
+    }
+    
+    /* UART Controllers */
+    for (i = 0; i < 2; i++) {
+        s->uart[i] = qdev_new(TYPE_PL011);
+        qdev_prop_set_chr(s->uart[i], "chardev", serial_hd(i));
+        busdev = SYS_BUS_DEVICE(s->uart[i]);
+        if (!sysbus_realize(busdev, errp)) {
+            return;
+        }
+        memory_region_add_subregion(&s->peripheral, 
+                                   S32K358_LPUART_BASE - S32K358_PERIPH_BASE + (i * 0x1000),
+                                   sysbus_mmio_get_region(busdev, 0));
+        sysbus_connect_irq(busdev, 0, qdev_get_gpio_in(armv7m, S32K358_LPUART0_IRQ + i));
+    }
+    
+    /* Create unimplemented peripheral regions */
+    create_unimplemented_device("s32k358.pit", S32K358_PIT_BASE, 0x1000);
+}
+
+static void s32k358_soc_class_init(ObjectClass *klass, void *data)
+{
+    DeviceClass *dc = DEVICE_CLASS(klass);
+    
+    dc->realize = s32k358_soc_realize;
+    dc->desc = "S32K358 SoC";
+}
+
+static void s32k358_board_init(MachineState *machine)
+{
+    S32K358BoardState *s = S32K358_BOARD(machine);
+    DeviceState *gpio_dev;
+    qemu_irq *gpio_in;
+    int i;
+    
+    /* Initialize SoC */
+    object_initialize_child(OBJECT(machine), "soc", &s->soc, TYPE_S32K358_SOC);
+    if (!qdev_realize(DEVICE(&s->soc), NULL, &error_fatal)) {
+        error_report("Failed to realize S32K358 SoC");
+        exit(1);
+    }
+    
+    /* Get GPIO device for pin connections */
+    gpio_dev = s->soc.gpio;
+    gpio_in = qdev_get_gpio_in_named(gpio_dev, "gpio-in", 0);
+    
+    /* Configure board-specific GPIO pins */
+    for (i = 0; i < ARRAY_SIZE(s32k358_gpio_pins); i++) {
+        const char *pin_name = s32k358_gpio_pins[i].name;
+        uint32_t pin_num = s32k358_gpio_pins[i].pin;
+        bool is_led = s32k358_gpio_pins[i].is_led;
+        bool is_button = s32k358_gpio_pins[i].is_button;
+        
+        if (pin_num >= 144) { /* Valid pin range check */
+            continue;
+        }
+        
+        if (is_led) {
+            /* LEDs start in OFF state (high = off for active low LEDs) */
+            qemu_irq_pulse(gpio_in[pin_num]);
+        } else if (is_button) {
+            /* Buttons start in released state (high for pull-up) */
+            qemu_irq_raise(gpio_in[pin_num]);
+        }
+    }
+    
+    /* Load firmware */
+    if (machine->firmware) {
+        if (!load_image_targphys(machine->firmware, S32K358_FLASH_BASE, 
+                                S32K358_FLASH_SIZE)) {
+            error_report("Could not load firmware '%s'", machine->firmware);
+            exit(1);
+        }
+    } else if (machine->kernel_filename) {
+        if (!load_image_targphys(machine->kernel_filename, S32K358_FLASH_BASE,
+                                S32K358_FLASH_SIZE)) {
+            error_report("Could not load kernel '%s'", machine->kernel_filename);
+            exit(1);
+        }
+    }
+    
+    /* Set up boot parameters */
+    armv7m_load_kernel(ARM_CPU(first_cpu), machine->kernel_filename, S32K358_FLASH_SIZE);
+}
+
+static void s32k358_board_class_init(ObjectClass *oc, void *data)
+{
+    MachineClass *mc = MACHINE_CLASS(oc);
+    
+    mc->desc = "S32K358 Evaluation Board";
+    mc->init = s32k358_board_init;
+    mc->max_cpus = 1;
+    mc->default_cpu_type = ARM_CPU_TYPE_NAME("cortex-m7");
+    mc->default_ram_size = S32K358_SRAM_SIZE;
+    mc->default_ram_id = "s32k358.sram";
+}
+
+static const TypeInfo s32k358_soc_info = {
+    .name = TYPE_S32K358_SOC,
+    .parent = TYPE_DEVICE,
+    .instance_size = sizeof(S32K358SoCState),
+    .instance_init = s32k358_soc_initfn,
+    .class_init = s32k358_soc_class_init,
+};
+
+static const TypeInfo s32k358_board_info = {
+    .name = TYPE_S32K358_BOARD,
+    .parent = TYPE_MACHINE,
+    .instance_size = sizeof(S32K358BoardState),
+    .class_init = s32k358_board_class_init,
+};
+
+static void s32k358_machine_init(void)
+{
+    type_register_static(&s32k358_soc_info);
+    type_register_static(&s32k358_board_info);
+}
+
+type_init(s32k358_machine_init)
+
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+// Makefile integration and build configuration
+
+# S32K358 GPIO QEMU Integration Build Configuration
+# Add this to your QEMU build system
+
+# For hw/arm/meson.build - Add these lines to the arm_ss.add() section:
+# 's32k358_gpio.c',
+# 's32k358_board.c',
+
+# Alternative Makefile approach (if not using meson)
+# Place in hw/arm/Makefile.objs
+
+# S32K358 Board and GPIO Support
+obj-$(CONFIG_S32K358) += s32k358_gpio.o
+obj-$(CONFIG_S32K358) += s32k358_board.o
+
+# Configuration option in hw/arm/Kconfig
+# config S32K358
+#     bool
+#     default y
+#     depends on ARM
+#     select ARM_V7M
+#     select PL011
+#     select UNIMP
+
+# Build script for standalone compilation
+#!/bin/bash
+# build_s32k358.sh
+
+set -e
+
+QEMU_SRC_DIR="${QEMU_SRC_DIR:-/path/to/qemu/source}"
+BUILD_DIR="${BUILD_DIR:-build}"
+
+echo "Building S32K358 GPIO support for QEMU..."
+
+# Check if QEMU source directory exists
+if [ ! -d "$QEMU_SRC_DIR" ]; then
+    echo "Error: QEMU source directory not found: $QEMU_SRC_DIR"
+    echo "Please set QEMU_SRC_DIR environment variable"
+    exit 1
+fi
+
+# Copy files to QEMU source
+echo "Copying S32K358 files to QEMU source..."
+cp s32k358_gpio.c "$QEMU_SRC_DIR/hw/misc/"
+cp s32k358_gpio.h "$QEMU_SRC_DIR/include/hw/misc/"
+cp s32k358_board.c "$QEMU_SRC_DIR/hw/arm/"
+
+# Update meson.build files
+echo "Updating build configuration..."
+
+# Add to hw/misc/meson.build
+if ! grep -q "s32k358_gpio.c" "$QEMU_SRC_DIR/hw/misc/meson.build"; then
+    echo "  's32k358_gpio.c'," >> "$QEMU_SRC_DIR/hw/misc/meson.build.tmp"
+    cat "$QEMU_SRC_DIR/hw/misc/meson.build" >> "$QEMU_SRC_DIR/hw/misc/meson.build.tmp"
+    mv "$QEMU_SRC_DIR/hw/misc/meson.build.tmp" "$QEMU_SRC_DIR/hw/misc/meson.build"
+fi
+
+# Add to hw/arm/meson.build
+if ! grep -q "s32k358_board.c" "$QEMU_SRC_DIR/hw/arm/meson.build"; then
+    sed -i "/arm_ss.add(files(/a\  's32k358_board.c'," "$QEMU_SRC_DIR/hw/arm/meson.build"
+fi
+
+# Configure and build
+echo "Configuring QEMU build..."
+cd "$QEMU_SRC_DIR"
+mkdir -p "$BUILD_DIR"
+cd "$BUILD_DIR"
+
+../configure \
+    --target-list=arm-softmmu \
+    --enable-debug \
+    --disable-werror
+
+echo "Building QEMU with S32K358 support..."
+make -j$(nproc)
+
+echo "Build completed successfully!"
+echo "QEMU binary with S32K358 support: $QEMU_SRC_DIR/$BUILD_DIR/qemu-system-arm"
+
+# Usage examples
+cat << 'EOF'
+
+Usage Examples:
+===============
+
+1. Basic S32K358 board:
+   ./qemu-system-arm -M s32k358evb -kernel firmware.elf
+
+2. With debugging:
+   ./qemu-system-arm -M s32k358evb -kernel firmware.elf -s -S
+
+3. With serial output:
+   ./qemu-system-arm -M s32k358evb -kernel firmware.elf -serial stdio
+
+4. With GPIO monitoring:
+   ./qemu-system-arm -M s32k358evb -kernel firmware.elf -monitor stdio
+
+GPIO Pin Access in Monitor:
+===========================
+(qemu) info gpio
+(qemu) gpio_set 107 1    # Turn on red LED
+(qemu) gpio_set 107 0    # Turn off red LED
+(qemu) gpio_get 144      # Read SW1 button state
+
+EOF
+
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+/*
+ * S32K358 GPIO Test Suite
+ * Comprehensive testing for GPIO functionality
+ */
+
+#include "s32k358_gpio.h"
+#include <stdio.h>
+#include <assert.h>
+#include <string.h>
+
+/* Test framework macros */
+#define TEST_ASSERT(condition, message) \
+    do { \
+        if (!(condition)) { \
+            printf("FAIL: %s - %s\n", __func__, message); \
+            return false; \
+        } \
+    } while(0)
+
+#define TEST_PASS() \
+    do { \
+        printf("PASS: %s\n", __func__); \
+        return true; \
+    } while(0)
+
+/* Test counters */
+static int tests_run = 0;
+static int tests_passed = 0;
+static int tests_failed = 0;
+
+/* Test result tracking */
+#define RUN_TEST(test_func) \
+    do { \
+        tests_run++; \
+        if (test_func()) { \
+            tests_passed++; \
+        } else { \
+            tests_failed++; \
+        } \
+    } while(0)
+
+/* Mock SIUL2 registers for testing */
+static uint32_t mock_mscr[GPIO_MAX_PINS];
+static uint8_t mock_gpdo[GPIO_MAX_PINS];
+static uint8_t mock_gpdi[GPIO_MAX_PINS];
+static uint32_t mock_pgpdo[5];
+static uint32_t mock_pgpdi[5];
+static uint32_t mock_ifeer = 0;
+static uint32_t mock_ireer = 0;
+static uint32_t mock_disr = 0;
+static uint32_t mock_direr = 0;
+
+/* Override register access macros for testing */
+#undef SIUL2_MSCR
+#undef SIUL2_GPDO
+#undef SIUL2_GPDI
+#undef SIUL2_PGPDO
+#undef SIUL2_PGPDI
+#undef SIUL2_IFEER
+#undef SIUL2_IREER
+#undef SIUL2_DISR
+#undef SIUL2_DIRER
+
+#define SIUL2_MSCR(pin)     mock_mscr[pin]
+#define SIUL2_GPDO(pin)     mock_gpdo[pin]
+#define SIUL2_GPDI(pin)     mock_gpdi[pin]
+#define SIUL2_PGPDO(port)   mock_pgpdo[port]
+#define SIUL2_PGPDI(port)   mock_pgpdi[port]
+#define SIUL2_IFEER         mock_ifeer
+#define SIUL2_IREER         mock_ireer
+#define SIUL2_DISR          mock_disr
+#define SIUL2_DIRER         mock_direr
+
+/* Reset mock registers */
+static void reset_mock_registers(void)
+{
+    memset(mock_mscr, 0, sizeof(mock_mscr));
+    memset(mock_gpdo, 0, sizeof(mock_gpdo));
+    memset(mock_gpdi, 0, sizeof(mock_gpdi));
+    memset(mock_pgpdo, 0, sizeof(mock_pgpdo));
+    memset(mock_pgpdi, 0, sizeof(mock_pgpdi));
+    mock_ifeer = 0;
+    mock_ireer = 0;
+    mock_disr = 0;
+    mock_direr = 0;
+}
+
+/* Test: GPIO Initialization */
+static bool test_gpio_init(void)
+{
+    reset_mock_registers();
+    
+    gpio_init();
+    
+    /* Check that all pins are configured as inputs with IBE=1 */
+    for (uint32_t pin = 0; pin < GPIO_MAX_PINS; pin++) {
+        TEST_ASSERT(mock_mscr[pin] == 0x00000100UL, "Pin not initialized as input");
+    }
+    
+    /* Check interrupt registers are cleared */
+    TEST_ASSERT(mock_ifeer == 0, "IFEER not cleared");
+    TEST_ASSERT(mock_ireer == 0, "IREER not cleared");
+    TEST_ASSERT(mock_direr == 0, "DIRER not cleared");
+    
+    TEST_PASS();
+}
+
+/* Test: Pin Configuration */
+static bool test_pin_configuration(void)
+{
+    reset_mock_registers();
+    
+    gpio_pin_config_t config = {
+        .pin = 10,
+        .mux = 0,
+        .output_enable = true,
+        .input_enable = false,
+        .open_drain = false,
+        .pull_enable = true,
+        .pull_up = true,
+        .hysteresis = false,
+        .invert = false,
+        .drive_strength = 2,
+        .slew_rate = 1
+    };
+    
+    gpio_pin_init(&config);
+    
+    uint32_t expected = MSCR_OBE_MASK | MSCR_PKE_MASK | MSCR_PUS_MASK | 
+                       (2 << MSCR_DSE_SHIFT) | (1 << MSCR_SRC_SHIFT);
+    
+    TEST_ASSERT(mock_mscr[10] == expected, "Pin configuration incorrect");
+    
+    TEST_PASS();
+}
+
+/* Test: Pin Direction Setting */
+static bool test_pin_direction(void)
+{
+    reset_mock_registers();
+    
+    /* Test output direction */
+    gpio_set_pin_direction(5, GPIO_OUTPUT);
+    TEST_ASSERT(mock_mscr[5] & MSCR_OBE_MASK, "Output buffer not enabled");
+    TEST_ASSERT(!(mock_mscr[5] & MSCR_IBE_MASK), "Input buffer not disabled");
+    
+    /* Test input direction */
+    gpio_set_pin_direction(5, GPIO_INPUT);
+    TEST_ASSERT(mock_mscr[5] & MSCR_IBE_MASK, "Input buffer not enabled");
+    TEST_ASSERT(!(mock_mscr[5] & MSCR_OBE_MASK), "Output buffer not disabled");
+    
+    /* Test Hi-Z direction */
+    gpio_set_pin_direction(5, GPIO_HI_Z);
+    TEST_ASSERT(!(mock_mscr[5] & MSCR_IBE_MASK), "Input buffer not disabled for Hi-Z");
+    TEST_ASSERT(!(mock_mscr[5] & MSCR_OBE_MASK), "Output buffer not disabled for Hi-Z");
+    
+    TEST_PASS();
+}
+
+/* Test: Pin Write/Read Operations */
+static bool test_pin_write_read(void)
+{
+    reset_mock_registers();
+    
+    /* Configure pin as output */
+    gpio_set_pin_direction(7, GPIO_OUTPUT);
+    
+    /* Test writing high */
+    gpio_write_pin(7, GPIO_HIGH);
+    TEST_ASSERT(mock_gpdo[7] == 1, "Pin not set high");
+    
+    /* Test writing low */
+    gpio_write_pin(7, GPIO_LOW);
+    TEST_ASSERT(mock_gpdo[7] == 0, "Pin not set low");
+    
+    /* Test reading (simulate input) */
+    mock_gpdi[7] = 1;
+    gpio_pin_state_t state = gpio_read_pin(7);
+    TEST_ASSERT(state == GPIO_HIGH, "Pin read incorrect");
+    
+    mock_gpdi[7] = 0;
+    state = gpio_read_pin(7);
+    TEST_ASSERT(state == GPIO_LOW, "Pin read incorrect");
+    
+    TEST_PASS();
+}
+
+/* Test: Pin Toggle */
+static bool test_pin_toggle(void)
+{
+    reset_mock_registers();
+    
+    /* Configure pin as output and set initial state */
+    gpio_set_pin_direction(15, GPIO_OUTPUT);
+    gpio_write_pin(15, GPIO_LOW);
+    mock_gpdi[15] = 0; /* Simulate reading back the output */
+    
+    /* Test toggle from low to high */
+    gpio_toggle_pin(15);
+    TEST_ASSERT(mock_gpdo[15] == 1, "Pin not toggled to high");
+    
+    /* Simulate the pin reading back high */
+    mock_gpdi[15] = 1;
+    
+    /* Test toggle from high to low */
+    gpio_toggle_pin(15);
+    TEST_ASSERT(mock_gpdo[15] == 0, "Pin not toggled to low");
+    
+    TEST_PASS();
+}
+
+/* Test: Port Operations */
+static bool test_port_operations(void)
+{
+    reset_mock_registers();
+    
+    /* Test port write */
+    uint32_t test_value = 0xAAAA5555;
+    gpio_write_port(GPIO_PORT_A, test_value);
+    TEST_ASSERT(mock_pgpdo[GPIO_PORT_A] == test_value, "Port write failed");
+    
+    /* Test port read */
+    mock_pgpdi[GPIO_PORT_B] = 0x12345678;
+    uint32_t read_value = gpio_read_port(GPIO_PORT_B);
+    TEST_ASSERT(read_value == 0x12345678, "Port read failed");
+    
+    TEST_PASS();
+}
+
+/* Test: Pull Resistor Configuration */
+static bool test_pull_configuration(void)
+{
+    reset_mock_registers();
+    
+    /* Test pull-up enable */
+    gpio_set_pull_config(20, GPIO_PULL_UP);
+    TEST_ASSERT(mock_mscr[20] & MSCR_PKE_MASK, "Pull enable not set");
+    TEST_ASSERT(mock_mscr[20] & MSCR_PUS_MASK, "Pull-up not selected");
+    
+    /* Test pull-down enable */
+    gpio_set_pull_config(20, GPIO_PULL_DOWN);
+    TEST_ASSERT(mock_mscr[20] & MSCR_PKE_MASK, "Pull enable not set");
+    TEST_ASSERT(!(mock_mscr[20] & MSCR_PUS_MASK), "Pull-down not selected");
+    
+    /* Test pull disable */
+    gpio_set_pull_config(20, GPIO_PULL_DISABLE);
+    TEST_ASSERT(!(mock_mscr[20] & MSCR_PKE_MASK), "Pull not disabled");
+    
+    TEST_PASS();
+}
+
+/* Test: Drive Strength Configuration */
+static bool test_drive_strength(void)
+{
+    reset_mock_registers();
+    
+    gpio_set_drive_strength(25, GPIO_DRIVE_STRENGTH_HIGH);
+    
+    uint32_t dse_value = (mock_mscr[25] & MSCR_DSE_MASK) >> MSCR_DSE_SHIFT;
+    TEST_ASSERT(dse_value == GPIO_DRIVE_STRENGTH_HIGH, "Drive strength not set correctly");
+    
+    TEST_PASS();
+}
+
+/* Test: Slew Rate Configuration */
+static bool test_slew_rate(void)
+{
+    reset_mock_registers();
+    
+    gpio_set_slew_rate(30, 3);
+    
+    uint32_t src_value = (mock_mscr[30] & MSCR_SRC_MASK) >> MSCR_SRC_SHIFT;
+    TEST_ASSERT(src_value == 3, "Slew rate not set correctly");
+    
+    TEST_PASS();
+}
+
+/* Test: Open Drain Configuration */
+static bool test_open_drain(void)
+{
+    reset_mock_registers();
+    
+    gpio_set_open_drain(35, true);
+    TEST_ASSERT(mock_mscr[35] & MSCR_ODE_MASK, "Open drain not enabled");
+    
+    gpio_set_open_drain(35, false);
+    TEST_ASSERT(!(mock_mscr[35] & MSCR_ODE_MASK), "Open drain not disabled");
+    
+    TEST_PASS();
+}
+
+/* Test: Hysteresis Configuration */
+static bool test_hysteresis(void)
+{
+    reset_mock_registers();
+    
+    gpio_set_hysteresis(40, true);
+    TEST_ASSERT(mock_mscr[40] & MSCR_HYS_MASK, "Hysteresis not enabled");
+    
+    gpio_set_hysteresis(40, false);
+    TEST_ASSERT(!(mock_mscr[40] & MSCR_HYS_MASK), "Hysteresis not disabled");
